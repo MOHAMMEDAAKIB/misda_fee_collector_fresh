@@ -69,7 +69,7 @@ class StudentProvider extends ChangeNotifier {
       registeredDate: DateTime.now().toIso8601String().substring(0, 10),
     );
 
-    await _sheets.append('Students!A:F', s.toRow()); // student first
+    await _sheets.append('Students!A:F', s.toRow(), raw: true); // student first
     await _sheets.update('Settings!B1', [next + 1]); // then the counter
 
     students = [...students, s];

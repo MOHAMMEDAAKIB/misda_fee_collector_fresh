@@ -51,3 +51,10 @@ String monthLabel(String key) {
   final m = int.tryParse(p[1]) ?? 1;
   return '${_names[(m - 1).clamp(0, 11)]} ${p[0]}';
 }
+
+String shortMonth(String key) {
+  final p = key.split('-');
+  if (p.length != 2) return key;
+  final m = int.tryParse(p[1]) ?? 1;
+  return _names[(m - 1).clamp(0, 11)].substring(0, 3);
+}
