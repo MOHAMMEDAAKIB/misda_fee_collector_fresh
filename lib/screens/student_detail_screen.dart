@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import '../models/payment.dart';
 import '../models/student.dart';
 import '../providers/payment_provider.dart';
+import '../providers/settings_provider.dart';
+import '../providers/student_provider.dart';
+import '../services/analytics.dart';
 import '../services/whatsapp_service.dart';
 import 'student_qr_screen.dart';
 
@@ -15,67 +18,143 @@ class StudentDetailScreen extends StatefulWidget {
 }
 
 class _State extends State<StudentDetailScreen> {
-  late DateTime _month =
-      DateTime(DateTime.now().year, DateTime.now().month);
+  DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
   bool _busy = false;
 
   String get _key => monthKey(_month);
   bool get _isCurrent => _key == monthKey(DateTime.now());
-
   void _shift(int d) =>
       setState(() => _month = DateTime(_month.year, _month.month + d));
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  Future<void> _markPaid() async {
-    final pp = context.read<PaymentProvider>();
-    final ok = await showDialog<bool>(
+  Future<num?> _askAmount(num balance) {
+    final c = TextEditingController(text: balance.toString());
+    return showDialog<num>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm payment'),
-        content: Text('${widget.student.name}\n'
-            '${monthLabel(_key)} • Rs. ${pp.monthlyFee}'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Mark paid')),
-        ],
-      ),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+        final text = c.text.trim();
+        final v = num.tryParse(text);
+        String? err;
+        if (text.isNotEmpty) {
+          if (v == null || v <= 0) {
+            err = 'Enter a valid amount';
+          } else if (v > balance) {
+            err = 'More than the balance (Rs. ${money(balance)})';
+          }
+        }
+        final ok = v != null && v > 0 && v <= balance;
+        return AlertDialog(
+          title: const Text('Amount received'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: c,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+                  InputDecoration(prefixText: 'Rs. ', errorText: err),
+              onChanged: (_) => setS(() {}),
+            ),
+            const SizedBox(height: 8),
+            Text(ok
+                ? 'Balance after: Rs. ${money(balance - v)}'
+                : 'Balance now: Rs. ${money(balance)}'),
+          ]),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: ok ? () => Navigator.pop(ctx, v) : null,
+                child: const Text('Save')),
+          ],
+        );
+      }),
     );
-    if (ok != true || !mounted) return;
+  }
 
+  Future<void> _addPayment(Student s, num fee, num balance) async {
+    final amount = await _askAmount(balance);
+    if (amount == null || !mounted) return;
+
+    final pp = context.read<PaymentProvider>();
     setState(() => _busy = true);
     try {
-      await pp.markPaid(widget.student, _key);
+      await pp.addPayment(s, _key, amount, fee);
       if (mounted) _snack('Payment saved');
     } on AlreadyPaidException {
-      if (mounted) _snack('Already marked paid for this month.');
+      if (mounted) _snack('Already fully paid for this month.');
+    } on OverpaymentException catch (e) {
+      if (mounted) {
+        _snack('The balance is only Rs. ${money(e.balance)}. Try again.');
+      }
     } catch (e) {
-      if (mounted) _snack('Could not save: $e');
+      if (mounted) {
+        _snack(e.toString().replaceFirst('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _sendReceipt(Payment p) async {
+  Future<void> _sendReceipt(Student s, num fee, num paid, Payment last) async {
     try {
-      final ok = await WhatsAppService.openText(
-          widget.student.phone, WhatsAppService.receipt(widget.student, p));
+      final ok = await WhatsAppService.openText(s.phone,
+          WhatsAppService.receipt(s, last, fee: fee, totalPaid: paid));
       if (!ok && mounted) _snack('WhatsApp could not be opened.');
     } catch (_) {
       if (mounted) _snack('WhatsApp could not be opened.');
     }
   }
 
+  Future<void> _setStatus(Student s, String status) async {
+    try {
+      await context.read<StudentProvider>().setStatus([s.regNo], status);
+    } catch (e) {
+      if (mounted) _snack(e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Widget _row(String a, num v, {bool bold = false}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(a),
+          Text('Rs. ${money(v)}',
+              style: TextStyle(
+                  fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final s = widget.student;
+    final sp = context.watch<StudentProvider>();
     final pp = context.watch<PaymentProvider>();
-    final paid = pp.paymentFor(s.regNo, _key);
+    final st = context.watch<SettingsProvider>();
+    final s = sp.students.firstWhere((x) => x.regNo == widget.student.regNo,
+        orElse: () => widget.student);
+
+    final fee = st.feeBook.feeFor(s.className, _key);
+    final paid = pp.paidFor(s.regNo, _key);
+    final balance = fee - paid;
+    final list = pp.paymentsFor(s.regNo, _key);
+
+    String label;
+    Color bg;
+    if (fee <= 0) {
+      label = 'FEE NOT SET';
+      bg = Colors.orange.shade50;
+    } else if (balance <= 0) {
+      label = 'PAID';
+      bg = Colors.green.shade50;
+    } else if (paid > 0) {
+      label = 'PARTIALLY PAID';
+      bg = Colors.amber.shade50;
+    } else {
+      label = 'NOT PAID';
+      bg = Colors.red.shade50;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -84,15 +163,25 @@ class _State extends State<StudentDetailScreen> {
           IconButton(
             tooltip: 'QR code',
             icon: const Icon(Icons.qr_code),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => StudentQrScreen(student: s))),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => StudentQrScreen(student: s))),
           ),
         ],
       ),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Text(s.name, style: Theme.of(context).textTheme.headlineSmall),
         Text('${s.className} • ${s.phone}'),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        if (!s.isActive)
+          Card(
+            color: Colors.orange.shade50,
+            child: ListTile(
+              title: const Text('Inactive student'),
+              trailing: FilledButton.tonal(
+                  onPressed: () => _setStatus(s, 'active'),
+                  child: const Text('Reactivate')),
+            ),
+          ),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           IconButton(
               icon: const Icon(Icons.chevron_left),
@@ -104,43 +193,54 @@ class _State extends State<StudentDetailScreen> {
               onPressed: _isCurrent ? null : () => _shift(1)),
         ]),
         Card(
-          color: paid != null ? Colors.green.shade50 : Colors.red.shade50,
+          color: bg,
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: paid != null
-                ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('PAID',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 20)),
-                    Text('Rs. ${paid.amount} on ${paid.paidDate}'),
-                    Text('Collected by ${paid.collectedBy}'),
-                  ])
-                : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('NOT PAID',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 20)),
-                    Text('Fee: Rs. ${pp.monthlyFee}'),
-                  ]),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 20)),
+              const SizedBox(height: 8),
+              if (fee <= 0)
+                Text('Set the fee for ${s.className} in Settings → Fees.')
+              else ...[
+                _row('Fee', fee),
+                _row('Paid', paid),
+                _row('Balance', balance < 0 ? 0 : balance, bold: true),
+              ],
+            ]),
           ),
         ),
-        const SizedBox(height: 16),
-        if (paid == null)
+        for (final p in list)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.payments_outlined),
+            title: Text('Rs. ${money(p.amount)}'),
+            subtitle: Text('${p.paidDate} • ${p.collectedBy}'),
+          ),
+        const SizedBox(height: 12),
+        if (s.isActive && fee > 0 && balance > 0)
           FilledButton.icon(
             icon: _busy
                 ? const SizedBox(
-                    height: 18,
-                    width: 18,
+                    height: 18, width: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.payments),
-            label: Text('Mark paid • Rs. ${pp.monthlyFee}'),
-            onPressed: _busy ? null : _markPaid,
-          )
-        else
-          FilledButton.icon(
+            label: Text(paid > 0 ? 'Add payment' : 'Record payment'),
+            onPressed: _busy ? null : () => _addPayment(s, fee, balance),
+          ),
+        if (list.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
             icon: const Icon(Icons.receipt_long),
             label: const Text('Send receipt on WhatsApp'),
-            onPressed: () => _sendReceipt(paid),
+            onPressed: () => _sendReceipt(s, fee, paid, list.last),
           ),
+        ],
+        if (s.isActive)
+          TextButton(
+              onPressed: () => _setStatus(s, 'inactive'),
+              child: const Text('Mark student as inactive')),
       ]),
     );
   }

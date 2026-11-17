@@ -5,9 +5,11 @@ import '../models/student.dart';
 import '../services/auth_service.dart';
 import '../services/sheets_service.dart';
 
-class AlreadyPaidException implements Exception {
-  AlreadyPaidException(this.payment);
-  final Payment payment;
+class AlreadyPaidException implements Exception {}
+
+class OverpaymentException implements Exception {
+  OverpaymentException(this.balance);
+  final num balance;
 }
 
 class PaymentProvider extends ChangeNotifier {
@@ -16,7 +18,6 @@ class PaymentProvider extends ChangeNotifier {
   final AuthService _auth;
 
   List<Payment> payments = [];
-  num monthlyFee = 0;
   bool loading = false;
   String? error;
 
@@ -31,12 +32,6 @@ class PaymentProvider extends ChangeNotifier {
     notifyListeners();
     try {
       payments = await _fetchPayments();
-      final fee = await _sheets.read('Settings!B2');
-      if (fee.isNotEmpty && fee[0].isNotEmpty) {
-        monthlyFee = num.tryParse(
-                fee[0][0].toString().replaceAll(RegExp(r'[^0-9.]'), '')) ??
-            0;
-      }
     } catch (e) {
       error = 'Could not load payments: $e';
     }
@@ -44,30 +39,31 @@ class PaymentProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Payment? paymentFor(String regNo, String month) {
-    for (final p in payments) {
-      if (p.regNo == regNo && p.month == month) return p;
-    }
-    return null;
-  }
+  num paidFor(String regNo, String month) => payments
+      .where((p) => p.regNo == regNo && p.month == month)
+      .fold<num>(0, (s, p) => s + p.amount);
 
-  Future<Payment> markPaid(Student s, String month) async {
-    if (monthlyFee <= 0) {
-      throw Exception('Set monthly_fee in Settings!B2 first.');
+  List<Payment> paymentsFor(String regNo, String month) =>
+      payments.where((p) => p.regNo == regNo && p.month == month).toList();
+
+  Future<Payment> addPayment(Student s, String month, num amount, num fee) async {
+    if (fee <= 0) {
+      throw Exception(
+          'Fee is not set for ${s.className} ($month). Set it in Settings.');
     }
-    // Fresh read right before writing, so a stale screen can't double-mark.
-    payments = await _fetchPayments();
-    final existing = paymentFor(s.regNo, month);
-    if (existing != null) {
+    if (amount <= 0) throw Exception('Enter an amount above 0.');
+
+    payments = await _fetchPayments(); // fresh read right before writing
+    final balance = fee - paidFor(s.regNo, month);
+    if (balance <= 0) {
       notifyListeners();
-      throw AlreadyPaidException(existing);
+      throw AlreadyPaidException();
     }
+    if (amount > balance) throw OverpaymentException(balance);
 
     final p = Payment(
       id: 'P${DateTime.now().millisecondsSinceEpoch}',
-      regNo: s.regNo,
-      month: month,
-      amount: monthlyFee,
+      regNo: s.regNo, month: month, amount: amount,
       paidDate: DateTime.now().toIso8601String().substring(0, 10),
       collectedBy: _auth.user?.email ?? '',
     );

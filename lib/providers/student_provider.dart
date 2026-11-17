@@ -1,7 +1,9 @@
 // lib/providers/student_provider.dart
 import 'package:flutter/foundation.dart';
 import '../models/student.dart';
+import '../models/fees.dart';
 import '../services/sheets_service.dart';
+import '../services/reg_number.dart';
 
 class DuplicateStudentException implements Exception {
   DuplicateStudentException(this.message);
@@ -22,7 +24,12 @@ class StudentProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final rows = await _sheets.read('Students!A2:F'); // skip header
-      students = rows.where((r) => r.isNotEmpty).map(Student.fromRow).toList();
+      students = [
+        for (var i = 0; i < rows.length; i++)
+          if (rows[i].isNotEmpty &&
+              rows[i][0].toString().trim().isNotEmpty)
+            Student.fromRow(rows[i], i + 2),
+      ];
     } catch (e) {
       error = 'Could not load students: $e';
     }
@@ -30,50 +37,46 @@ class StudentProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  String _fmt(int n) => 'REG${n.toString().padLeft(4, '0')}';
-
+  /// Register a student under an existing [cls]. The reg number is decided at
+  /// save time after a fresh read of the sheet.
   Future<Student> register({
     required String name,
     required String phone,
-    required String className,
+    required ClassInfo cls,
   }) async {
     final p = normalizePhone(phone);
     final n = name.trim();
 
-    await load(); // fresh copy right before checking, reduces clashes
+    await load();
     if (error != null) throw Exception(error);
 
-    final dup = students.any(
-      (s) => s.phone == p && s.name.toLowerCase() == n.toLowerCase(),
-    );
-    if (dup) {
+    if (students.any((s) =>
+        s.phone == p && s.name.toLowerCase() == n.toLowerCase())) {
       throw DuplicateStudentException(
-        'This student is already registered with this phone number.',
-      );
-    }
-
-    final c = await _sheets.read('Settings!B1');
-    var next = (c.isNotEmpty && c[0].isNotEmpty)
-        ? int.tryParse(c[0][0].toString()) ?? 1
-        : 1;
-    final used = students.map((s) => s.regNo).toSet();
-    while (used.contains(_fmt(next))) {
-      next++; // self-heals if counter lagged
+          'This student is already registered with this phone number.');
     }
 
     final s = Student(
-      regNo: _fmt(next),
-      name: n,
-      phone: p,
-      className: className.trim(),
+      regNo: RegNumber.next(cls.code, students.map((x) => x.regNo)),
+      name: n, phone: p, className: cls.name,
       registeredDate: DateTime.now().toIso8601String().substring(0, 10),
     );
-
-    await _sheets.append('Students!A:F', s.toRow(), raw: true); // student first
-    await _sheets.update('Settings!B1', [next + 1]); // then the counter
-
+    await _sheets.append('Students!A:F', s.toRow(), raw: true);
     students = [...students, s];
     notifyListeners();
     return s;
+  }
+
+  /// Activate or deactivate students by reg number. Reloads first so row
+  /// numbers are never stale.
+  Future<void> setStatus(Iterable<String> regNos, String status) async {
+    await load();
+    if (error != null) throw Exception(error);
+    final wanted = regNos.toSet();
+    await _sheets.batchUpdate({
+      for (final s in students)
+        if (wanted.contains(s.regNo)) 'Students!F${s.rowNumber}': status,
+    });
+    await load();
   }
 }

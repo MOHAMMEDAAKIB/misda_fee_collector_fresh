@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/payment.dart';
 import '../providers/payment_provider.dart';
+import '../providers/settings_provider.dart';
 import '../providers/student_provider.dart';
 import '../services/analytics.dart';
 import 'analytics_screen.dart';
 import 'register_student_screen.dart';
 import 'scan_screen.dart';
+import 'settings_screen.dart';
 import 'student_list_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,7 +30,8 @@ class _State extends State<HomeScreen> {
   Future<void> _refresh() async {
     final sp = context.read<StudentProvider>();
     final pp = context.read<PaymentProvider>();
-    await Future.wait([sp.load(), pp.load()]);
+    final st = context.read<SettingsProvider>();
+    await Future.wait([sp.load(), pp.load(), st.load()]);
     if (mounted) setState(() => _updated = DateTime.now());
   }
 
@@ -40,14 +43,19 @@ class _State extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final sp = context.watch<StudentProvider>();
     final pp = context.watch<PaymentProvider>();
-    final loading = sp.loading || pp.loading;
-    final error = sp.error ?? pp.error;
+    final st = context.watch<SettingsProvider>();
+    final loading = sp.loading || pp.loading || st.loading;
+    final error = sp.error ?? pp.error ?? st.error;
     final firstLoad = loading && sp.students.isEmpty && pp.payments.isEmpty;
 
-    final a = Analytics(sp.students, pp.payments);
+    final settings = context.watch<SettingsProvider>();
+    final a = Analytics(sp.students, pp.payments, settings.feeBook);
     final m = monthKey(DateTime.now());
-    final eligible = a.eligible(m).length;
-    final paid = a.paidCount(m);
+    final billed = a.billed(m);
+    final paid = a.countOf(m, FeeStatus.paid);
+    final partial = a.countOf(m, FeeStatus.partial);
+    final unpaid = a.countOf(m, FeeStatus.unpaid);
+    final noFee = a.noFeeClasses(m);
 
     return Scaffold(
       appBar: AppBar(
@@ -99,6 +107,16 @@ class _State extends State<HomeScreen> {
                   ),
                 ]),
                 const SizedBox(height: 12),
+                if (noFee.isNotEmpty)
+                  Card(
+                    color: Colors.orange.shade50,
+                    child: ListTile(
+                      leading: const Icon(Icons.warning_amber),
+                      title: Text('Fee not set for: ${noFee.join(', ')}'),
+                      subtitle: const Text('Tap to open Settings'),
+                      onTap: () => _go(const SettingsScreen()),
+                    ),
+                  ),
                 Card(
                   child: InkWell(
                     onTap: () => _go(const AnalyticsScreen()),
@@ -110,15 +128,16 @@ class _State extends State<HomeScreen> {
                             Text('Paid vs unpaid this month',
                                 style: Theme.of(context).textTheme.bodySmall),
                             const SizedBox(height: 4),
-                            Text('$paid of $eligible paid',
+                            Text('$paid of $billed fully paid',
                                 style:
                                     Theme.of(context).textTheme.headlineSmall),
                             const SizedBox(height: 8),
                             LinearProgressIndicator(
-                                value: eligible == 0 ? 0 : paid / eligible,
+                                value: billed == 0 ? 0 : paid / billed,
                                 minHeight: 8),
                             const SizedBox(height: 6),
-                            Text('${eligible - paid} unpaid'),
+                            Text('$partial partial • $unpaid unpaid • '
+                                'Rs. ${money(a.outstanding(m))} outstanding'),
                           ]),
                     ),
                   ),
@@ -172,6 +191,15 @@ class _State extends State<HomeScreen> {
                     ),
                   ),
                 ]),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.settings),
+                    label: const Text('Settings'),
+                    onPressed: () => _go(const SettingsScreen()),
+                  ),
+                ),
               ]),
             ),
     );

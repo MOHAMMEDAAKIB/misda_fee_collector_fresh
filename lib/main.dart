@@ -5,6 +5,7 @@ import 'services/auth_service.dart';
 import 'services/sheets_service.dart';
 import 'providers/student_provider.dart';
 import 'providers/payment_provider.dart';
+import 'providers/settings_provider.dart';
 import 'screens/home_screen.dart';
 
 Future<void> main() async {
@@ -22,6 +23,7 @@ Future<void> main() async {
         Provider<AuthService>.value(value: auth),
         ChangeNotifierProvider(create: (_) => StudentProvider(sheets)),
         ChangeNotifierProvider(create: (_) => PaymentProvider(sheets, auth)),
+        ChangeNotifierProvider(create: (_) => SettingsProvider(sheets)),
       ],
       child: const MyApp(),
     ),

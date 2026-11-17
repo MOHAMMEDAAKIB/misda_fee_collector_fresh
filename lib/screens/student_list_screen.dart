@@ -13,6 +13,7 @@ class StudentListScreen extends StatefulWidget {
 
 class _State extends State<StudentListScreen> {
   String _q = '';
+  bool _showInactive = false;
 
   @override
   void initState() {
@@ -25,15 +26,24 @@ class _State extends State<StudentListScreen> {
   Widget build(BuildContext context) {
     final p = context.watch<StudentProvider>();
     final q = _q.trim().toLowerCase();
+    final all = p.students.where((s) => _showInactive || s.isActive).toList();
     final list = q.isEmpty
-        ? p.students
-        : p.students.where((s) =>
+        ? all
+        : all.where((s) =>
             s.name.toLowerCase().contains(q) ||
             s.regNo.toLowerCase().contains(q) ||
             s.phone.contains(q)).toList();
 
     return Scaffold(
-      appBar: AppBar(title: Text('Students (${p.students.length})')),
+      appBar: AppBar(
+        title: Text('Students (${p.students.where((s) => _showInactive || s.isActive).length})'),
+        actions: [
+          Switch(
+            value: _showInactive,
+            onChanged: (v) => setState(() => _showInactive = v),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         icon: const Icon(Icons.person_add),
         label: const Text('Register'),

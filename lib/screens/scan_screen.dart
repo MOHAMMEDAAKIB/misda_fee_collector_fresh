@@ -42,19 +42,10 @@ class _State extends State<ScanScreen> {
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(m)));
 
-  /// Accepts "REG0012", "reg0012", or just "12".
   Student? _find(String code) {
     final c = code.trim().toUpperCase();
-    final list = context.read<StudentProvider>().students;
-    for (final s in list) {
+    for (final s in context.read<StudentProvider>().students) {
       if (s.regNo.toUpperCase() == c) return s;
-    }
-    final n = int.tryParse(c);
-    if (n != null) {
-      final want = 'REG${n.toString().padLeft(4, '0')}';
-      for (final s in list) {
-        if (s.regNo == want) return s;
-      }
     }
     return null;
   }

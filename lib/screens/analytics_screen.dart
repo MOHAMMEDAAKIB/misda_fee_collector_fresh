@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/payment.dart';
 import '../providers/payment_provider.dart';
+import '../providers/settings_provider.dart';
 import '../providers/student_provider.dart';
 import '../services/analytics.dart';
 import '../services/whatsapp_service.dart';
+import 'settings_screen.dart';
 import 'student_detail_screen.dart';
 import 'widgets/monthly_bar_chart.dart';
 
@@ -30,9 +32,9 @@ class _State extends State<AnalyticsScreen> {
     ]);
   }
 
-  Future<void> _remind(String phone, String name, num fee) async {
+  Future<void> _remind(String phone, String name, num balance) async {
     final text = 'Hello $name, this is a reminder that the class fee for '
-        '${monthLabel(_key)} (Rs. ${money(fee)}) is still pending. '
+        '${monthLabel(_key)} is still pending. Balance: Rs. ${money(balance)}. '
         'Please ignore this message if you have already paid.';
     try {
       await WhatsAppService.openText(phone, text);
@@ -48,13 +50,16 @@ class _State extends State<AnalyticsScreen> {
   Widget build(BuildContext context) {
     final sp = context.watch<StudentProvider>();
     final pp = context.watch<PaymentProvider>();
-    final loading = sp.loading || pp.loading;
+    final st = context.watch<SettingsProvider>();
+    final loading = sp.loading || pp.loading || st.loading;
 
-    final a = Analytics(sp.students, pp.payments);
-    final eligible = a.eligible(_key).length;
-    final paid = a.paidCount(_key);
-    final unpaid = a.unpaid(_key);
+
+    final a = Analytics(sp.students, pp.payments, st.feeBook);
+    final billed = a.billed(_key);
+    final paid = a.countOf(_key, FeeStatus.paid);
+    final pending = a.pending(_key);
     final classes = a.byClass(_key);
+    final noFee = a.noFeeClasses(_key);
     final t = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -83,6 +88,17 @@ class _State extends State<AnalyticsScreen> {
                 icon: const Icon(Icons.chevron_right),
                 onPressed: _isCurrent ? null : () => _shift(1)),
           ]),
+          if (noFee.isNotEmpty)
+            Card(
+              color: Colors.orange.shade50,
+              child: ListTile(
+                leading: const Icon(Icons.warning_amber),
+                title: Text('Fee not set for: ${noFee.join(', ')}'),
+                subtitle: const Text('Tap to open Settings'),
+                onTap: () => Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen())),
+              ),
+            ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -90,8 +106,8 @@ class _State extends State<AnalyticsScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _Num('Collected', 'Rs. ${money(a.monthTotal(_key))}'),
-                    _Num('Paid', '$paid / $eligible'),
-                    _Num('Unpaid', '${eligible - paid}'),
+                    _Num('Outstanding', 'Rs. ${money(a.outstanding(_key))}'),
+                    _Num('Paid', '$paid / $billed'),
                   ]),
             ),
           ),
@@ -105,25 +121,38 @@ class _State extends State<AnalyticsScreen> {
           for (final c in classes)
             ListTile(
               title: Text(c.name),
-              subtitle: Text('${c.paid} of ${c.students} paid'),
-              trailing: Text('Rs. ${money(c.collected)}',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('${c.paid} paid • ${c.partial} partial • ${c.unpaid} unpaid'),
+              trailing: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('Rs. ${money(c.collected)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text('of ${money(c.expected)}',
+                      style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
             ),
           const SizedBox(height: 16),
-          Text('Unpaid (${unpaid.length})', style: t.titleMedium),
-          if (unpaid.isEmpty && eligible > 0)
+          Text('Pending (${pending.length})', style: t.titleMedium),
+          if (pending.isEmpty && billed > 0)
             const ListTile(
                 leading: Icon(Icons.check_circle, color: Colors.green),
                 title: Text('Everyone has paid')),
-          for (final s in unpaid)
+          for (final s in pending)
             ListTile(
               title: Text(s.name),
               subtitle: Text('${s.regNo} • ${s.className}'),
-              trailing: IconButton(
-                tooltip: 'Remind on WhatsApp',
-                icon: const Icon(Icons.chat),
-                onPressed: () => _remind(s.phone, s.name, pp.monthlyFee),
-              ),
+              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('Rs. ${money(a.balanceOf(s, _key))}',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                IconButton(
+                  tooltip: 'Remind on WhatsApp',
+                  icon: const Icon(Icons.chat),
+                  onPressed: () => _remind(s.phone, s.name,
+                      a.balanceOf(s, _key)),
+                ),
+              ]),
               onTap: () => Navigator.push(context, MaterialPageRoute(
                   builder: (_) => StudentDetailScreen(student: s))),
             ),

@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/student.dart';
 import '../models/payment.dart';
+import '../services/analytics.dart';
 
 class WhatsAppService {
   static String message(Student s) =>
@@ -24,14 +25,20 @@ class WhatsAppService {
       mode: LaunchMode.externalApplication);
 
   /// Payment receipt text to send after marking paid.
-  static String receipt(Student s, Payment p) =>
-      'Payment received ✅\n'
-      'Name: ${s.name}\n'
-      'Reg No: ${s.regNo}\n'
-      'Month: ${monthLabel(p.month)}\n'
-      'Amount: Rs. ${p.amount}\n'
-      'Date: ${p.paidDate}\n'
-      'Thank you!';
+  static String receipt(Student s, Payment p,
+      {required num fee, required num totalPaid}) {
+    final balance = fee - totalPaid;
+    return 'Payment received ✅\n'
+        'Name: ${s.name}\n'
+        'Reg No: ${s.regNo}\n'
+        'Month: ${monthLabel(p.month)}\n'
+        'Fee: Rs. ${money(fee)}\n'
+        'Paid now: Rs. ${money(p.amount)}\n'
+        'Total paid: Rs. ${money(totalPaid)}\n'
+        'Balance: Rs. ${money(balance < 0 ? 0 : balance)}\n'
+        'Date: ${p.paidDate}\n'
+        'Thank you!';
+  }
 
   /// Shares QR image + caption through the system share sheet.
   static Future<ShareResult> shareQr(Student s, File png) {

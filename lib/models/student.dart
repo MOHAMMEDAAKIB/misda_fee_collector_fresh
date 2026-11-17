@@ -7,17 +7,22 @@ class Student {
     required this.className,
     required this.registeredDate,
     this.status = 'active',
+    this.rowNumber = 0,
   });
 
   final String regNo, name, phone, className, registeredDate, status;
+  final int rowNumber;
+
+  bool get isActive => status.toLowerCase() == 'active';
 
   // Sheets drops trailing empty cells, so never assume a row has 6 items.
-  factory Student.fromRow(List<Object?> r) {
+  factory Student.fromRow(List<Object?> r, [int rowNumber = 0]) {
     String c(int i) => i < r.length ? r[i].toString() : '';
     return Student(
       regNo: c(0), name: c(1), phone: c(2),
       className: c(3), registeredDate: c(4),
       status: c(5).isEmpty ? 'active' : c(5),
+      rowNumber: rowNumber,
     );
   }
 

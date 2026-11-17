@@ -34,4 +34,16 @@ class SheetsService {
       valueInputOption: 'USER_ENTERED',
     );
   }
+
+  Future<void> batchUpdate(Map<String, Object?> cells) async {
+    if (cells.isEmpty) return;
+    final req = sheets.BatchUpdateValuesRequest(
+      valueInputOption: 'RAW',
+      data: [
+        for (final e in cells.entries)
+          sheets.ValueRange(range: e.key, values: [[e.value]]),
+      ],
+    );
+    await (await _api()).spreadsheets.values.batchUpdate(req, spreadsheetId);
+  }
 }
